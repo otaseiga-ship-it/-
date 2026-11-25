@@ -3,20 +3,23 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>棚卸スキャナー</title>
+  <title>棚卸スキャナー（高速版）</title>
   <script src="https://unpkg.com/html5-qrcode"></script>
   <style>
-    body { font-family: sans-serif; padding: 15px; background-color: #f4f4f9; color: #333; }
-    h2 { text-align: center; font-size: 1.2rem; }
+    body { font-family: sans-serif; padding: 15px; background-color: #f4f4f9; color: #333; margin: 0; }
+    h2 { text-align: center; font-size: 1.2rem; margin: 10px 0 15px; }
     .panel { background: #fff; padding: 15px; border-radius: 8px; margin-bottom: 15px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-    #reader { width: 100%; max-width: 400px; margin: 0 auto 15px auto; }
+    #reader-container { position: relative; width: 100%; max-width: 450px; margin: 0 auto 10px; background: #000; border-radius: 8px; overflow: hidden; min-height: 220px; }
+    #reader { width: 100%; }
     .stock-box { display: flex; justify-content: space-between; background: #eef2f5; padding: 10px; border-radius: 5px; margin-bottom: 10px; }
     .diff-box { background: #fff3cd; color: #856404; padding: 10px; border-radius: 5px; font-weight: bold; margin-bottom: 15px; }
-    input[type="text"], input[type="number"], select { width: 100%; padding: 10px; font-size: 16px; margin-bottom: 10px; box-sizing: border-box; }
-    button { width: 100%; padding: 12px; font-size: 16px; font-weight:bold; border: none; border-radius: 5px; cursor: pointer; }
+    input[type="text"], input[type="number"], select { width: 100%; padding: 12px; font-size: 16px; margin-bottom: 10px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 5px; }
+    button { width: 100%; padding: 12px; font-size: 16px; font-weight: bold; border: none; border-radius: 5px; cursor: pointer; }
     .btn-primary { background: #28a745; color: white; }
-    .btn-secondary { background: #6c757d; color: white; margin-top: 10px; }
+    .btn-secondary { background: #6c757d; color: white; margin-top: 8px; }
+    .btn-scan { background: #007bff; color: white; margin-bottom: 10px; }
     button:disabled { background: #ccc; }
+    #status-msg { text-align: center; color: #0056b3; font-weight: bold; min-height: 24px; margin: 8px 0; }
   </style>
 </head>
 <body>
@@ -33,34 +36,58 @@
 
   <!-- スキャン画面 -->
   <div id="main-screen" style="display: none;">
-    <div id="reader"></div>
-    <p id="status-msg" style="text-align:center; color: #0056b3; font-weight: bold;"></p>
-    <button class="btn-secondary" onclick="resetSettings()">URLを再設定する</button>
+    <div id="reader-container">
+      <div id="reader"></div>
+    </div>
+    <p id="status-msg">バーコードを枠内に合わせてください</p>
 
-    <div id="product-panel" class="panel" style="display: none; margin-top:15px;">
-      <p style="font-size: 0.9em; color: #666;">バーコード: <span id="display-barcode"></span></p>
+    <button id="resume-btn" class="btn-scan" style="display: none;" onclick="resumeScanning()">次の商品をスキャンする</button>
+
+    <div id="product-panel" class="panel" style="display: none; margin-top:10px;">
+      <p style="font-size: 0.9em; color: #666; margin: 0 0 5px;">バーコード: <span id="display-barcode"></span></p>
       <h3 style="margin-top: 0;" id="display-name"></h3>
       <div class="stock-box">
         <div>📦 倉庫: <span id="stock-warehouse" style="font-weight:bold; font-size:1.2em;"></span></div>
         <div>🏪 店舗: <span id="stock-store" style="font-weight:bold; font-size:1.2em;"></span></div>
       </div>
       <hr>
-      <h4>棚卸入力</h4>
-      <label>棚卸を行う場所を選択:</label>
+      <h4 style="margin: 10px 0;">棚卸入力</h4>
+      <label>棚卸を行う場所:</label>
       <select id="location-select" onchange="calcDiff()">
         <option value="店舗">店舗</option>
         <option value="倉庫">倉庫</option>
       </select>
       <label>数えた実在庫数:</label>
-      <input type="number" id="input-actual" placeholder="0" min="0" oninput="calcDiff()">
-      <div class="diff-box">差異: <span id="display-diff">0</span></div>
+      <input type="number" id="input-actual" inputmode="numeric" placeholder="0" min="0" oninput="calcDiff()">
+      <div class="diff-box">差異: <span id="display-diff">-</span></div>
       <button id="submit-btn" class="btn-primary" onclick="submitInventory()">棚卸データを記録</button>
     </div>
+
+    <button class="btn-secondary" onclick="resetSettings()">URLを再設定する</button>
   </div>
 
   <script>
     let currentData = {};
     let gasUrl = localStorage.getItem('gas_app_url') || "";
+    let html5QrCode = null;
+    let isProcessing = false;
+
+    // 読み取り成功時のビープ音生成
+    function playBeep() {
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(1200, ctx.currentTime);
+        gain.gain.setValueAtTime(0.15, ctx.currentTime);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.1);
+        if (navigator.vibrate) navigator.vibrate(100);
+      } catch (e) {}
+    }
 
     window.onload = function() {
       if (gasUrl) {
@@ -71,7 +98,7 @@
     };
 
     function saveSettings() {
-      const url = document.getElementById('input-url').value;
+      const url = document.getElementById('input-url').value.trim();
       if (!url.includes('script.google.com')) return alert("正しいGASのURLを入力してください。");
       localStorage.setItem('gas_app_url', url);
       gasUrl = url;
@@ -81,52 +108,119 @@
     }
 
     function resetSettings() {
+      if (!confirm("URL設定をリセットしますか？")) return;
       localStorage.removeItem('gas_app_url');
       location.reload();
     }
 
-    let html5QrcodeScanner;
+    // 高速化設定で背面カメラを直接起動
     function startScanner() {
-      if(!html5QrcodeScanner) {
-        html5QrcodeScanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: {width: 250, height: 100} }, false);
-        html5QrcodeScanner.render(onScanSuccess);
-      }
+      if (html5QrCode) return;
+
+      // JANコード(EAN_13, EAN_8)とCODE_128に限定し、ネイティブ高速解析を有効化
+      const formatsToSupport = [
+        Html5QrcodeSupportedFormats.EAN_13,
+        Html5QrcodeSupportedFormats.EAN_8,
+        Html5QrcodeSupportedFormats.CODE_128
+      ];
+
+      html5QrCode = new Html5Qrcode("reader", {
+        formatsToSupport: formatsToSupport,
+        experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+        verbose: false
+      });
+
+      const config = {
+        fps: 20, // 読み取り頻度を2倍にアップ
+        qrbox: (viewfinderWidth, viewfinderHeight) => {
+          // バーコードに合わせて横長の読み取り枠を自動計算
+          return {
+            width: Math.min(320, Math.floor(viewfinderWidth * 0.85)),
+            height: Math.min(130, Math.floor(viewfinderHeight * 0.45))
+          };
+        },
+        videoConstraints: {
+          facingMode: "environment", // 背面カメラを強制指定
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        }
+      };
+
+      html5QrCode.start(
+        { facingMode: "environment" },
+        config,
+        onScanSuccess
+      ).catch(err => {
+        document.getElementById('status-msg').innerText = "カメラの起動に失敗しました。ブラウザのカメラ許可を確認してください。";
+      });
     }
 
     function onScanSuccess(decodedText) {
-      if(currentData.barcode === decodedText) return; 
-      document.getElementById('status-msg').innerText = "データ取得中...";
-      
+      if (isProcessing) return;
+      isProcessing = true;
+
+      playBeep();
+      // スキャン成功したらカメラを一時停止して負荷を下げる
+      if (html5QrCode && html5QrCode.isScanning) {
+        html5QrCode.pause(true);
+      }
+
+      document.getElementById('status-msg').innerText = `読み取り完了 (${decodedText}) データ照会中...`;
+
       fetch(`${gasUrl}?barcode=${decodedText}`)
         .then(res => res.json())
         .then(data => {
-          if(data.status === 'success') {
-            currentData = { barcode: decodedText, name: data.name, stock_warehouse: parseInt(data.stock_warehouse) || 0, stock_store: parseInt(data.stock_store) || 0 };
+          if (data.status === 'success') {
+            currentData = {
+              barcode: decodedText,
+              name: data.name,
+              stock_warehouse: parseInt(data.stock_warehouse) || 0,
+              stock_store: parseInt(data.stock_store) || 0
+            };
             document.getElementById('display-barcode').innerText = currentData.barcode;
             document.getElementById('display-name').innerText = currentData.name;
             document.getElementById('stock-warehouse').innerText = currentData.stock_warehouse;
             document.getElementById('stock-store').innerText = currentData.stock_store;
-            document.getElementById('input-actual').value = ""; 
+            document.getElementById('input-actual').value = "";
             document.getElementById('display-diff').innerText = "-";
             document.getElementById('product-panel').style.display = 'block';
-            document.getElementById('status-msg').innerText = "";
+            document.getElementById('resume-btn').style.display = 'block';
+            document.getElementById('status-msg').innerText = "在庫数を入力してください";
+            document.getElementById('input-actual').focus();
           } else {
-            alert("マスターに未登録の商品です。");
-            currentData = {};
+            alert(`未登録の商品です (${decodedText})`);
+            resumeScanning();
           }
-        }).catch(err => { alert("通信エラー"); currentData = {}; });
+        })
+        .catch(err => {
+          alert("通信エラーが発生しました。");
+          resumeScanning();
+        });
+    }
+
+    function resumeScanning() {
+      isProcessing = false;
+      currentData = {};
+      document.getElementById('product-panel').style.display = 'none';
+      document.getElementById('resume-btn').style.display = 'none';
+      document.getElementById('status-msg').innerText = "バーコードを枠内に合わせてください";
+      if (html5QrCode) {
+        html5QrCode.resume();
+      }
     }
 
     function calcDiff() {
       const actualVal = document.getElementById('input-actual').value;
-      if (actualVal === "") return document.getElementById('display-diff').innerText = "-";
-      
+      if (actualVal === "") {
+        document.getElementById('display-diff').innerText = "-";
+        return;
+      }
       const actualStock = parseInt(actualVal);
       const location = document.getElementById('location-select').value;
       const systemStock = (location === "倉庫") ? currentData.stock_warehouse : currentData.stock_store;
       const diff = actualStock - systemStock;
       const diffEl = document.getElementById('display-diff');
-      
+
       diffEl.innerText = diff > 0 ? `+${diff} (過剰)` : diff < 0 ? `${diff} (不足)` : `0 (一致)`;
       diffEl.style.color = diff !== 0 ? "red" : "green";
     }
@@ -146,18 +240,24 @@
       fetch(gasUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify({ barcode: currentData.barcode, name: currentData.name, location: location, systemStock: systemStock, actualStock: actualStock, diff: actualStock - systemStock })
+        body: JSON.stringify({
+          barcode: currentData.barcode,
+          name: currentData.name,
+          location: location,
+          systemStock: systemStock,
+          actualStock: actualStock,
+          diff: actualStock - systemStock
+        })
       })
       .then(res => res.json())
       .then(data => {
-        if(data.status === 'success') {
-          alert(`棚卸を記録しました。`);
-          document.getElementById('product-panel').style.display = 'none';
-          currentData = {};
+        if (data.status === 'success') {
+          resumeScanning();
+          document.getElementById('status-msg').innerText = "記録しました！次のバーコードをどうぞ";
         }
-      }).finally(() => {
+      })
+      .finally(() => {
         btn.disabled = false;
-        document.getElementById('status-msg').innerText = "次のバーコードをスキャンしてください";
       });
     }
   </script>
