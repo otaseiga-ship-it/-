@@ -1,265 +1,840 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>棚卸スキャナー（高速版）</title>
-  <script src="https://unpkg.com/html5-qrcode"></script>
-  <style>
-    body { font-family: sans-serif; padding: 15px; background-color: #f4f4f9; color: #333; margin: 0; }
-    h2 { text-align: center; font-size: 1.2rem; margin: 10px 0 15px; }
-    .panel { background: #fff; padding: 15px; border-radius: 8px; margin-bottom: 15px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-    #reader-container { position: relative; width: 100%; max-width: 450px; margin: 0 auto 10px; background: #000; border-radius: 8px; overflow: hidden; min-height: 220px; }
-    #reader { width: 100%; }
-    .stock-box { display: flex; justify-content: space-between; background: #eef2f5; padding: 10px; border-radius: 5px; margin-bottom: 10px; }
-    .diff-box { background: #fff3cd; color: #856404; padding: 10px; border-radius: 5px; font-weight: bold; margin-bottom: 15px; }
-    input[type="text"], input[type="number"], select { width: 100%; padding: 12px; font-size: 16px; margin-bottom: 10px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 5px; }
-    button { width: 100%; padding: 12px; font-size: 16px; font-weight: bold; border: none; border-radius: 5px; cursor: pointer; }
-    .btn-primary { background: #28a745; color: white; }
-    .btn-secondary { background: #6c757d; color: white; margin-top: 8px; }
-    .btn-scan { background: #007bff; color: white; margin-bottom: 10px; }
-    button:disabled { background: #ccc; }
-    #status-msg { text-align: center; color: #0056b3; font-weight: bold; min-height: 24px; margin: 8px 0; }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>棚卸ターミナル</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&display=swap" rel="stylesheet">
+<!-- バージョン固定（unpkgの最新版自動取得は、ある日突然動かなくなる原因になるため） -->
+<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<style>
+:root{
+  --bg:#E8EBEF; --surface:#FFFFFF; --ink:#17202B; --muted:#5A6572; --line:#CBD2DA;
+  --loc:#2257C9; --loc-soft:#E2EAFB; --on-loc:#FFFFFF;
+  --ok:#1D7F46; --ng:#C42626; --warn:#A35F00;
+  --font:"BIZ UDPGothic","Hiragino Sans","Hiragino Kaku Gothic ProN","Noto Sans JP","Yu Gothic",Meiryo,sans-serif;
+  color-scheme:light;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+:root[data-loc="倉庫"]{ --loc:#A85700; --loc-soft:#FAECD9; }
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#11161C; --surface:#1B222B; --ink:#E7EBF0; --muted:#9BA6B2; --line:#2D3742;
+    --loc:#5F8FFF; --loc-soft:#1C2840; --on-loc:#0D1320;
+    --ok:#4CC27E; --ng:#FF6E6E; --warn:#F0A63C; color-scheme:dark;
+  }
+  :root[data-loc="倉庫"]{ --loc:#F0A040; --loc-soft:#36270F; }
+}
+*,*::before,*::after{ box-sizing:inherit; }
+html{ scroll-padding-top:env(safe-area-inset-top,0px); }
+body{ margin:0; background:var(--bg); color:var(--ink); font-family:var(--font); font-size:16px; line-height:1.5; -webkit-tap-highlight-color:transparent; }
+button,input,select{ font:inherit; color:inherit; }
+button{ cursor:pointer; }
+:focus-visible{ outline:3px solid var(--loc); outline-offset:2px; }
+.num{ font-variant-numeric:tabular-nums; }
+
+/* ヘッダー：場所によって色が変わる（数える場所の取り違え防止） */
+body::before{ content:""; position:fixed; inset:0 0 auto; height:env(safe-area-inset-top,0px); z-index:10; background:var(--loc); }
+header{ position:sticky; top:env(safe-area-inset-top,0px); z-index:9; background:var(--loc); color:var(--on-loc); padding:10px 14px 12px; transition:background .25s; }
+.head-row{ display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
+.app-name{ font-weight:700; font-size:.95rem; }
+.sync-pill{ font-size:.8rem; padding:3px 10px; border-radius:999px; background:rgba(255,255,255,.2); border:0; color:inherit; }
+.sync-pill.alert{ background:var(--surface); color:var(--ng); font-weight:700; }
+.loc-switch{ display:grid; grid-template-columns:1fr 1fr; background:rgba(0,0,0,.18); border-radius:10px; padding:4px; gap:4px; }
+.loc-switch button{ border:0; background:transparent; color:inherit; padding:10px 0; border-radius:7px; font-size:1.15rem; font-weight:700; opacity:.75; }
+.loc-switch button[aria-pressed="true"]{ background:var(--surface); color:var(--loc); opacity:1; }
+
+main{ padding:12px 12px 96px; max-width:560px; margin:0 auto; }
+.view[hidden]{ display:none; }
+.block{ background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:12px; }
+h2{ font-size:1.05rem; margin:0 0 10px; }
+.hint{ color:var(--muted); font-size:.85rem; margin:4px 0 10px; }
+
+.seg{ display:grid; grid-template-columns:1fr 1fr; border:1px solid var(--line); border-radius:9px; overflow:hidden; margin-bottom:10px; }
+.seg button{ border:0; background:var(--surface); padding:9px 4px; font-size:.9rem; }
+.seg button[aria-pressed="true"]{ background:var(--loc-soft); color:var(--loc); font-weight:700; }
+
+#reader-wrap{ position:relative; background:#000; border-radius:12px; overflow:hidden; min-height:200px; }
+#reader{ width:100%; }
+#reader video{ display:block; }
+#cam-off{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; color:#fff; text-align:center; padding:16px; }
+.cam-bar{ display:flex; gap:8px; margin:8px 0 10px; }
+.cam-bar button{ flex:1; }
+
+.btn{ border:1px solid var(--line); background:var(--surface); border-radius:9px; padding:12px; font-weight:700; min-height:48px; }
+.btn.primary{ background:var(--loc); border-color:var(--loc); color:var(--on-loc); }
+.btn.danger{ color:var(--ng); }
+.btn:disabled{ opacity:.45; cursor:default; }
+.field{ width:100%; padding:12px; border:1px solid var(--line); border-radius:9px; background:var(--surface); font-size:16px; }
+.row{ display:flex; gap:8px; }
+.row .field{ flex:1; }
+label.lbl{ display:block; font-size:.85rem; color:var(--muted); margin:10px 0 4px; }
+
+/* 読み取り結果パネル：端末の液晶表示をイメージ */
+.readout{ border:2px solid var(--loc); border-radius:12px; background:var(--surface); padding:12px 14px; margin-bottom:12px; }
+.readout.unknown{ border-color:var(--warn); }
+.ro-jan{ font-size:.8rem; color:var(--muted); }
+.ro-name{ font-size:1.1rem; font-weight:700; margin:2px 0 8px; word-break:break-all; }
+.ro-main{ display:flex; align-items:flex-end; justify-content:space-between; gap:10px; }
+.ro-count{ font-size:3.4rem; font-weight:700; line-height:1; color:var(--loc); }
+.ro-count small{ font-size:1rem; color:var(--muted); font-weight:400; margin-left:4px; }
+.ro-side{ text-align:right; font-size:.9rem; color:var(--muted); }
+.ro-diff{ font-size:1.15rem; font-weight:700; }
+.plus{ color:var(--warn); } .minus{ color:var(--ng); } .zero{ color:var(--ok); }
+.ro-actions{ display:grid; grid-template-columns:1fr 1fr 1.4fr; gap:8px; margin-top:12px; }
+.ro-actions .btn{ font-size:1.2rem; }
+.ro-actions .btn.small{ font-size:.95rem; }
+.undo-line{ display:flex; justify-content:space-between; align-items:center; margin-top:8px; font-size:.85rem; color:var(--muted); }
+.linkbtn{ border:0; background:none; color:var(--loc); font-weight:700; padding:6px 0; }
+
+.stats{ display:flex; gap:8px; }
+.stat{ flex:1; background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:8px 10px; }
+.stat b{ display:block; font-size:1.3rem; }
+.stat span{ font-size:.75rem; color:var(--muted); }
+.progress{ height:6px; background:var(--line); border-radius:3px; overflow:hidden; margin-top:6px; }
+.progress i{ display:block; height:100%; background:var(--loc); width:0; transition:width .3s; }
+
+/* 一覧 */
+.chips{ display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
+.chip{ border:1px solid var(--line); background:var(--surface); border-radius:999px; padding:6px 12px; font-size:.85rem; }
+.chip[aria-pressed="true"]{ background:var(--loc); border-color:var(--loc); color:var(--on-loc); font-weight:700; }
+.list{ list-style:none; margin:0; padding:0; }
+.list li{ border-bottom:1px solid var(--line); }
+.list li:last-child{ border-bottom:0; }
+.item-btn{ width:100%; display:grid; grid-template-columns:1fr auto; gap:8px; text-align:left; border:0; background:none; padding:10px 2px; }
+.item-name{ font-weight:700; font-size:.95rem; word-break:break-all; }
+.item-sub{ font-size:.75rem; color:var(--muted); }
+.item-qty{ text-align:right; }
+.item-qty b{ font-size:1.25rem; display:block; }
+.item-qty span{ font-size:.75rem; }
+.tag{ display:inline-block; font-size:.7rem; padding:1px 6px; border-radius:4px; background:var(--warn); color:#fff; margin-left:4px; vertical-align:middle; }
+.empty{ color:var(--muted); text-align:center; padding:20px 0; font-size:.9rem; }
+
+/* 下部ナビ */
+nav{ position:fixed; left:0; right:0; bottom:0; z-index:9; background:var(--surface); border-top:1px solid var(--line); display:grid; grid-template-columns:repeat(4,1fr); padding-bottom:env(safe-area-inset-bottom,0px); }
+nav button{ border:0; background:none; padding:9px 0 10px; font-size:.78rem; color:var(--muted); display:flex; flex-direction:column; align-items:center; gap:2px; }
+nav button .ic{ font-size:1.25rem; line-height:1; }
+nav button[aria-current="page"]{ color:var(--loc); font-weight:700; }
+
+/* ダイアログ */
+.modal{ position:fixed; inset:0; z-index:20; background:rgba(0,0,0,.45); display:flex; align-items:flex-end; justify-content:center; }
+.modal[hidden]{ display:none; }
+.sheet{ background:var(--surface); width:100%; max-width:560px; border-radius:16px 16px 0 0; padding:18px 16px calc(18px + env(safe-area-inset-bottom,0px)); }
+.sheet .big{ font-size:2.2rem; text-align:center; font-weight:700; padding:10px; }
+.sheet .row .btn{ flex:1; }
+
+#toast{ position:fixed; left:50%; bottom:calc(84px + env(safe-area-inset-bottom,0px)); transform:translateX(-50%); z-index:30; background:var(--ink); color:var(--surface); padding:10px 16px; border-radius:10px; font-size:.9rem; max-width:90vw; opacity:0; pointer-events:none; transition:opacity .2s; }
+#toast.show{ opacity:1; }
+#toast.ng{ background:var(--ng); color:#fff; }
+#toast.warn{ background:var(--warn); color:#fff; }
+@media (prefers-reduced-motion: reduce){ *{ transition:none !important; } }
+</style>
 </head>
 <body>
 
-  <h2>棚卸スキャナー</h2>
-
-  <!-- 設定画面 -->
-  <div id="setup-screen" class="panel">
-    <h3>⚙️ 初期設定</h3>
-    <p style="font-size:0.9em; color:#666;">Google Apps Scriptで発行されたURLを貼り付けてください。</p>
-    <input type="text" id="input-url" placeholder="https://script.google.com/macros/s/...">
-    <button class="btn-primary" onclick="saveSettings()">設定を保存して開始</button>
+<header>
+  <div class="head-row">
+    <span class="app-name">棚卸ターミナル</span>
+    <button class="sync-pill" id="sync-pill" onclick="flushQueue(true)">準備中</button>
   </div>
+  <div class="loc-switch" role="group" aria-label="数える場所">
+    <button data-loc="店舗" onclick="setLocation('店舗')">🏪 店舗</button>
+    <button data-loc="倉庫" onclick="setLocation('倉庫')">📦 倉庫</button>
+  </div>
+</header>
 
-  <!-- スキャン画面 -->
-  <div id="main-screen" style="display: none;">
-    <div id="reader-container">
+<main>
+  <!-- 初期設定 -->
+  <section class="view" id="view-setup" hidden>
+    <div class="block">
+      <h2>初期設定</h2>
+      <p class="hint">Google Apps Scriptの「ウェブアプリURL」と、スクリプトに設定した合言葉を入力してください。</p>
+      <label class="lbl" for="set-url">ウェブアプリURL</label>
+      <input class="field" id="set-url" type="url" placeholder="https://script.google.com/macros/s/.../exec">
+      <label class="lbl" for="set-token">合言葉</label>
+      <input class="field" id="set-token" type="text" autocomplete="off">
+      <label class="lbl" for="set-staff">担当者名</label>
+      <input class="field" id="set-staff" type="text" placeholder="例：山田">
+      <div style="height:14px"></div>
+      <button class="btn primary" style="width:100%" onclick="saveSetup()">保存して商品データを取得</button>
+    </div>
+  </section>
+
+  <!-- スキャン -->
+  <section class="view" id="view-scan" hidden>
+    <div class="seg" role="group" aria-label="読み取り方法">
+      <button data-mode="count" onclick="setMode('count')">1回読むごとに＋1個</button>
+      <button data-mode="qty" onclick="setMode('qty')">読んだら数量を入力</button>
+    </div>
+
+    <div id="reader-wrap">
       <div id="reader"></div>
-    </div>
-    <p id="status-msg">バーコードを枠内に合わせてください</p>
-
-    <button id="resume-btn" class="btn-scan" style="display: none;" onclick="resumeScanning()">次の商品をスキャンする</button>
-
-    <div id="product-panel" class="panel" style="display: none; margin-top:10px;">
-      <p style="font-size: 0.9em; color: #666; margin: 0 0 5px;">バーコード: <span id="display-barcode"></span></p>
-      <h3 style="margin-top: 0;" id="display-name"></h3>
-      <div class="stock-box">
-        <div>📦 倉庫: <span id="stock-warehouse" style="font-weight:bold; font-size:1.2em;"></span></div>
-        <div>🏪 店舗: <span id="stock-store" style="font-weight:bold; font-size:1.2em;"></span></div>
+      <div id="cam-off">
+        <div>カメラは停止中です</div>
+        <button class="btn primary" onclick="startCamera()">カメラを起動</button>
       </div>
-      <hr>
-      <h4 style="margin: 10px 0;">棚卸入力</h4>
-      <label>棚卸を行う場所:</label>
-      <select id="location-select" onchange="calcDiff()">
-        <option value="店舗">店舗</option>
-        <option value="倉庫">倉庫</option>
-      </select>
-      <label>数えた実在庫数:</label>
-      <input type="number" id="input-actual" inputmode="numeric" placeholder="0" min="0" oninput="calcDiff()">
-      <div class="diff-box">差異: <span id="display-diff">-</span></div>
-      <button id="submit-btn" class="btn-primary" onclick="submitInventory()">棚卸データを記録</button>
+    </div>
+    <div class="cam-bar">
+      <button class="btn" id="cam-toggle" onclick="toggleCamera()">カメラを停止</button>
     </div>
 
-    <button class="btn-secondary" onclick="resetSettings()">URLを再設定する</button>
+    <div class="row" style="margin-bottom:12px">
+      <input class="field" id="manual-code" inputmode="numeric" autocomplete="off" placeholder="JANを手入力（外付けスキャナーもここ）" enterkeyhint="done">
+      <button class="btn" onclick="submitManual()">読込</button>
+    </div>
+
+    <div class="readout" id="readout" hidden>
+      <div class="ro-jan num" id="ro-jan"></div>
+      <div class="ro-name" id="ro-name"></div>
+      <div class="ro-main">
+        <div class="ro-count num"><span id="ro-count">0</span><small>個</small></div>
+        <div class="ro-side num">
+          <div>帳簿 <span id="ro-system">-</span></div>
+          <div class="ro-diff" id="ro-diff">-</div>
+        </div>
+      </div>
+      <div class="ro-actions">
+        <button class="btn" onclick="bump(-1)" aria-label="1個減らす">−1</button>
+        <button class="btn" onclick="bump(1)" aria-label="1個増やす">＋1</button>
+        <button class="btn small" onclick="openQty(currentJan)">数量を入力</button>
+      </div>
+      <div class="undo-line">
+        <span id="ro-loc"></span>
+        <button class="linkbtn" onclick="undo()">直前の操作を取り消す</button>
+      </div>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><b class="num" id="st-items">0</b><span>数えた品目</span></div>
+      <div class="stat"><b class="num" id="st-total">0</b><span>合計個数</span></div>
+      <div class="stat"><b class="num" id="st-left">0</b><span>未カウント</span><div class="progress"><i id="st-bar"></i></div></div>
+    </div>
+  </section>
+
+  <!-- 一覧 -->
+  <section class="view" id="view-list" hidden>
+    <div class="block">
+      <h2 id="list-title">カウント一覧</h2>
+      <div class="chips" role="group" aria-label="絞り込み">
+        <button class="chip" data-filter="all" onclick="setFilter('all')">すべて</button>
+        <button class="chip" data-filter="diff" onclick="setFilter('diff')">差異あり</button>
+        <button class="chip" data-filter="unknown" onclick="setFilter('unknown')">未登録</button>
+      </div>
+      <ul class="list" id="count-list"></ul>
+    </div>
+    <div class="block">
+      <h2>結果を送信</h2>
+      <p class="hint">送信はこの場所（<span id="send-loc"></span>）の分だけです。電波がなくても端末に保存され、つながった時に自動で送られます。</p>
+      <label style="display:flex;gap:8px;align-items:flex-start;font-size:.9rem;margin-bottom:12px">
+        <input type="checkbox" id="send-zero" checked style="margin-top:4px">
+        <span>読み取らなかった商品（帳簿在庫が1以上）を実在庫0個として記録する</span>
+      </label>
+      <button class="btn primary" style="width:100%" onclick="sendResults()">この場所の棚卸結果を送信</button>
+      <p class="hint" id="sent-info"></p>
+    </div>
+  </section>
+
+  <!-- 未カウント・検索 -->
+  <section class="view" id="view-left" hidden>
+    <div class="block">
+      <h2>商品をさがす</h2>
+      <p class="hint">バーコードが読めない商品は、名前で探してタップすると数量を入力できます。</p>
+      <input class="field" id="search" type="search" placeholder="商品名またはJANで検索" oninput="renderLeft()">
+    </div>
+    <div class="block">
+      <h2 id="left-title">まだ数えていない商品</h2>
+      <ul class="list" id="left-list"></ul>
+    </div>
+  </section>
+
+  <!-- 設定 -->
+  <section class="view" id="view-settings" hidden>
+    <div class="block">
+      <h2>商品データ</h2>
+      <p class="hint" id="master-info"></p>
+      <button class="btn" style="width:100%" onclick="syncMaster(true)">スプレッドシートから再取得</button>
+    </div>
+    <div class="block">
+      <h2>読み取り</h2>
+      <label class="lbl" for="set-cooldown">同じバーコードを続けて数えるまでの間隔</label>
+      <select class="field" id="set-cooldown" onchange="saveOptions()">
+        <option value="0.6">0.6秒（速い）</option>
+        <option value="1">1秒（標準）</option>
+        <option value="1.5">1.5秒</option>
+        <option value="2.5">2.5秒（二重読み防止を強く）</option>
+      </select>
+      <label style="display:flex;gap:8px;align-items:center;margin-top:12px">
+        <input type="checkbox" id="set-sound" onchange="saveOptions()"> 読み取り音とバイブ
+      </label>
+    </div>
+    <div class="block">
+      <h2>今回の棚卸</h2>
+      <p class="hint" id="session-info"></p>
+      <button class="btn" style="width:100%;margin-bottom:8px" onclick="exportCsv()">カウント結果をCSVで保存</button>
+      <button class="btn danger" style="width:100%" onclick="startNewSession()">新しい棚卸を始める（今のカウントを消去）</button>
+    </div>
+    <div class="block">
+      <h2>接続設定</h2>
+      <p class="hint" id="conn-info"></p>
+      <button class="btn" style="width:100%" onclick="showSetup()">URL・合言葉・担当者を変更</button>
+    </div>
+  </section>
+</main>
+
+<nav>
+  <button data-view="scan" onclick="showView('scan')"><span class="ic">▣</span>スキャン</button>
+  <button data-view="list" onclick="showView('list')"><span class="ic">≡</span>一覧・送信</button>
+  <button data-view="left" onclick="showView('left')"><span class="ic">？</span>未カウント</button>
+  <button data-view="settings" onclick="showView('settings')"><span class="ic">⚙</span>設定</button>
+</nav>
+
+<!-- 数量入力 -->
+<div class="modal" id="qty-modal" hidden onclick="if(event.target===this) closeQty()">
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="qty-name">
+    <div class="ro-jan num" id="qty-jan"></div>
+    <div class="ro-name" id="qty-name"></div>
+    <div class="hint" id="qty-current"></div>
+    <input class="field big num" id="qty-input" type="number" inputmode="numeric" min="0" placeholder="0">
+    <div class="row" style="margin-top:10px">
+      <button class="btn primary" id="qty-add" onclick="applyQty('add')">今の数に足す</button>
+      <button class="btn" id="qty-set" onclick="applyQty('set')">この数にする</button>
+    </div>
+    <button class="btn" style="width:100%;margin-top:8px" onclick="closeQty()">やめる</button>
   </div>
+</div>
 
-  <script>
-    let currentData = {};
-    let gasUrl = localStorage.getItem('gas_app_url') || "";
-    let html5QrCode = null;
-    let isProcessing = false;
+<div id="toast" role="status" aria-live="polite"></div>
 
-    // 読み取り成功時のビープ音生成
-    function playBeep() {
-      try {
-        const ctx = new (window.AudioContext || window.webkitAudioContext)();
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = "sine";
-        osc.frequency.setValueAtTime(1200, ctx.currentTime);
-        gain.gain.setValueAtTime(0.15, ctx.currentTime);
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start();
-        osc.stop(ctx.currentTime + 0.1);
-        if (navigator.vibrate) navigator.vibrate(100);
-      } catch (e) {}
+<script>
+/* ========== 保存まわり ========== */
+const LS = {
+  get(k, d){ try{ const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; }catch(e){ return d; } },
+  set(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){ toast('端末への保存に失敗しました。容量を確認してください','ng'); } }
+};
+const LOCS = ['店舗','倉庫'];
+const makeId = () => Date.now().toString(36) + Math.random().toString(36).slice(2,8);
+
+let settings = LS.get('tana_settings', { url:'', token:'', staff:'', cooldown:1, sound:true });
+if(!settings.url){ const old = localStorage.getItem('gas_app_url'); if(old) settings.url = old; } // 旧版からの引き継ぎ
+let master  = LS.get('tana_master', { updatedAt:null, items:{} });
+let session = LS.get('tana_session', null) || newSession();
+let queue   = LS.get('tana_queue', []);
+
+function newSession(){
+  return { id:makeId(), startedAt:new Date().toISOString(), location:'店舗', mode:'count',
+           counts:{ '店舗':{}, '倉庫':{} }, unknown:{}, history:[], sent:{} };
+}
+const saveSession = () => LS.set('tana_session', session);
+const saveQueue   = () => { LS.set('tana_queue', queue); renderPill(); };
+
+/* ========== 通知・音 ========== */
+let toastTimer;
+function toast(msg, kind=''){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.className = 'show ' + kind;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.className = '', 2600);
+}
+let audioCtx = null;
+function unlockAudio(){ // iPhoneは画面タップ時に作らないと音が出ない
+  if(!audioCtx){ try{ audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }catch(e){} }
+  if(audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+}
+document.addEventListener('pointerdown', unlockAudio, { passive:true });
+function beep(kind){
+  if(!settings.sound) return;
+  try{
+    unlockAudio(); if(!audioCtx) return;
+    const tones = kind === 'ng' ? [[400,.12],[300,.18]] : [[1250,.08]];
+    let t = audioCtx.currentTime;
+    tones.forEach(([f,d]) => {
+      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.type = kind === 'ng' ? 'square' : 'sine';
+      o.frequency.value = f; g.gain.value = .12;
+      o.connect(g); g.connect(audioCtx.destination);
+      o.start(t); o.stop(t + d); t += d + .03;
+    });
+    if(navigator.vibrate) navigator.vibrate(kind === 'ng' ? [80,60,80] : 60);
+  }catch(e){}
+}
+
+/* ========== 通信 ========== */
+async function api(method, params, body){
+  if(!settings.url) throw new Error('URLが未設定です');
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 20000);
+  try{
+    let res;
+    if(method === 'GET'){
+      const q = new URLSearchParams({ ...params, token:settings.token }).toString();
+      res = await fetch(`${settings.url}?${q}`, { signal:ctrl.signal });
+    }else{
+      res = await fetch(settings.url, { method:'POST', headers:{ 'Content-Type':'text/plain;charset=utf-8' },
+        body:JSON.stringify({ ...body, token:settings.token }), signal:ctrl.signal });
     }
+    const data = await res.json();
+    if(data.status === 'error') throw new Error(data.message || 'サーバーでエラーが起きました');
+    return data;
+  }finally{ clearTimeout(timer); }
+}
 
-    window.onload = function() {
-      if (gasUrl) {
-        document.getElementById('setup-screen').style.display = 'none';
-        document.getElementById('main-screen').style.display = 'block';
-        startScanner();
-      }
-    };
+async function syncMaster(manual){
+  try{
+    const data = await api('GET', { action:'master' });
+    const items = {};
+    (data.items || []).forEach(it => {
+      items[String(it.jan).trim()] = { name:it.name, warehouse:Number(it.warehouse)||0, store:Number(it.store)||0 };
+    });
+    master = { updatedAt:new Date().toISOString(), items };
+    LS.set('tana_master', master);
+    if(manual) toast(`商品データを取得しました（${Object.keys(items).length}件）`);
+    renderAll();
+  }catch(e){
+    if(manual || !master.updatedAt) toast('商品データを取得できません：' + e.message, 'ng');
+  }
+}
 
-    function saveSettings() {
-      const url = document.getElementById('input-url').value.trim();
-      if (!url.includes('script.google.com')) return alert("正しいGASのURLを入力してください。");
-      localStorage.setItem('gas_app_url', url);
-      gasUrl = url;
-      document.getElementById('setup-screen').style.display = 'none';
-      document.getElementById('main-screen').style.display = 'block';
-      startScanner();
+// マスタに無いJANは、念のためサーバーに1件問い合わせ（追加直後の商品に対応）
+async function lookupOne(jan){
+  try{
+    const d = await api('GET', { barcode:jan });
+    if(d.status === 'success'){
+      master.items[jan] = { name:d.name, warehouse:Number(d.stock_warehouse)||0, store:Number(d.stock_store)||0 };
+      LS.set('tana_master', master);
+      delete session.unknown[jan]; saveSession();
+      if(currentJan === jan) renderReadout();
+      renderStats();
     }
+  }catch(e){}
+}
 
-    function resetSettings() {
-      if (!confirm("URL設定をリセットしますか？")) return;
-      localStorage.removeItem('gas_app_url');
-      location.reload();
+/* ========== 送信キュー（圏外でも消えない） ========== */
+let flushing = false;
+async function flushQueue(manual){
+  if(flushing) return;
+  if(!queue.length){ if(manual) toast('未送信のデータはありません'); return; }
+  if(!navigator.onLine){ if(manual) toast('オフラインです。電波のある場所で再送されます','warn'); return; }
+  flushing = true; renderPill();
+  try{
+    while(queue.length){
+      const job = queue[0];
+      await api('POST', null, job);
+      queue.shift(); saveQueue();
+      session.sent[job.location] = new Date().toISOString(); saveSession();
+      toast(`${job.location}の棚卸結果を送信しました（${job.records.length}件）`);
     }
+  }catch(e){
+    toast('送信できませんでした。自動で再送します：' + e.message, 'ng');
+  }finally{
+    flushing = false; renderPill(); renderSentInfo();
+  }
+}
+window.addEventListener('online', () => flushQueue());
+setInterval(() => { if(queue.length) flushQueue(); }, 30000);
 
-    // 高速化設定で背面カメラを直接起動
-    function startScanner() {
-      if (html5QrCode) return;
+/* ========== カウント処理 ========== */
+let currentJan = null, lastCode = '', lastTime = 0;
+const sysKey = loc => loc === '倉庫' ? 'warehouse' : 'store';
+const getCount = (jan, loc=session.location) => session.counts[loc][jan] || 0;
 
-      // JANコード(EAN_13, EAN_8)とCODE_128に限定し、ネイティブ高速解析を有効化
-      const formatsToSupport = [
-        Html5QrcodeSupportedFormats.EAN_13,
-        Html5QrcodeSupportedFormats.EAN_8,
-        Html5QrcodeSupportedFormats.CODE_128
-      ];
+function setCount(jan, value, loc=session.location){
+  value = Math.max(0, Math.floor(Number(value) || 0));
+  const before = session.counts[loc][jan];
+  session.history.push({ loc, jan, before: before === undefined ? null : before });
+  if(session.history.length > 300) session.history.shift();
+  session.counts[loc][jan] = value;
+  saveSession();
+}
 
-      html5QrCode = new Html5Qrcode("reader", {
-        formatsToSupport: formatsToSupport,
-        experimentalFeatures: { useBarCodeDetectorIfSupported: true },
-        verbose: false
+function handleCode(raw, source){
+  const jan = String(raw || '').replace(/\s/g, '');
+  if(!jan) return;
+  const now = Date.now();
+  if(source === 'camera' && jan === lastCode && now - lastTime < settings.cooldown * 1000) return;
+  lastCode = jan; lastTime = now;
+
+  const known = !!master.items[jan];
+  if(!known){ session.unknown[jan] = true; lookupOne(jan); }
+  beep(known ? 'ok' : 'ng');
+  currentJan = jan;
+
+  if(session.mode === 'count'){
+    setCount(jan, getCount(jan) + 1);
+    if(!known) toast('未登録のバーコードです。カウントは記録しました','warn');
+    renderReadout(); renderStats();
+  }else{
+    pauseCamera();
+    renderReadout();
+    openQty(jan);
+  }
+}
+
+function bump(n){
+  if(!currentJan) return;
+  setCount(currentJan, getCount(currentJan) + n);
+  renderReadout(); renderStats();
+}
+
+function undo(){
+  const h = session.history.pop();
+  if(!h){ toast('取り消せる操作はありません'); return; }
+  if(h.before === null) delete session.counts[h.loc][h.jan];
+  else session.counts[h.loc][h.jan] = h.before;
+  saveSession();
+  if(h.loc !== session.location) setLocation(h.loc);
+  currentJan = h.jan;
+  toast('直前の操作を取り消しました');
+  renderAll();
+}
+
+function submitManual(){
+  const el = document.getElementById('manual-code');
+  handleCode(el.value, 'manual');
+  el.value = '';
+}
+// 外付けBluetoothスキャナーはキーボードとして文字＋Enterを送るので、ここで受ける
+document.getElementById('manual-code').addEventListener('keydown', e => {
+  if(e.key === 'Enter'){ e.preventDefault(); submitManual(); }
+});
+
+/* ========== 数量入力 ========== */
+let qtyJan = null, qtyLoc = null;
+function openQty(jan, loc){
+  if(!jan) return;
+  qtyJan = jan; qtyLoc = loc || session.location;
+  const it = master.items[jan];
+  document.getElementById('qty-jan').textContent = `${qtyLoc}　${jan}`;
+  document.getElementById('qty-name').textContent = it ? it.name : '未登録の商品';
+  const c = session.counts[qtyLoc][jan];
+  document.getElementById('qty-current').textContent =
+    `今のカウント：${c === undefined ? '未カウント' : c + '個'}　帳簿：${it ? it[sysKey(qtyLoc)] + '個' : '-'}`;
+  const inp = document.getElementById('qty-input');
+  inp.value = '';
+  // 数えた事のある商品は「足す」、一覧からの修正は「この数にする」をEnterの既定に
+  inp.dataset.def = (c === undefined || loc === undefined) ? 'add' : 'set';
+  document.getElementById('qty-modal').hidden = false;
+  setTimeout(() => inp.focus(), 50);
+}
+function applyQty(how){
+  const v = document.getElementById('qty-input').value;
+  if(v === '' || Number(v) < 0){ toast('0以上の数を入力してください','warn'); return; }
+  const n = Math.floor(Number(v));
+  const base = session.counts[qtyLoc][qtyJan] || 0;
+  setCount(qtyJan, how === 'add' ? base + n : n, qtyLoc);
+  currentJan = qtyJan;
+  closeQty();
+  renderAll();
+}
+function closeQty(){
+  document.getElementById('qty-modal').hidden = true;
+  qtyJan = null;
+  if(currentView === 'scan') resumeCamera();
+}
+document.getElementById('qty-input').addEventListener('keydown', e => {
+  if(e.key === 'Enter'){ e.preventDefault(); applyQty(e.target.dataset.def); }
+});
+
+/* ========== カメラ ========== */
+let scanner = null, camState = 'off'; // off / on / paused
+async function startCamera(){
+  if(camState !== 'off') return;
+  if(typeof Html5Qrcode === 'undefined'){ toast('読み取り部品を読み込めませんでした。通信を確認してください','ng'); return; }
+  try{
+    if(!scanner){
+      scanner = new Html5Qrcode('reader', {
+        formatsToSupport:[
+          Html5QrcodeSupportedFormats.EAN_13, Html5QrcodeSupportedFormats.EAN_8,
+          Html5QrcodeSupportedFormats.UPC_A, Html5QrcodeSupportedFormats.CODE_128
+        ],
+        experimentalFeatures:{ useBarCodeDetectorIfSupported:true },
+        verbose:false
       });
-
-      const config = {
-        fps: 20, // 読み取り頻度を2倍にアップ
-        qrbox: (viewfinderWidth, viewfinderHeight) => {
-          // バーコードに合わせて横長の読み取り枠を自動計算
-          return {
-            width: Math.min(320, Math.floor(viewfinderWidth * 0.85)),
-            height: Math.min(130, Math.floor(viewfinderHeight * 0.45))
-          };
-        },
-        videoConstraints: {
-          facingMode: "environment", // 背面カメラを強制指定
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
-        }
-      };
-
-      html5QrCode.start(
-        { facingMode: "environment" },
-        config,
-        onScanSuccess
-      ).catch(err => {
-        document.getElementById('status-msg').innerText = "カメラの起動に失敗しました。ブラウザのカメラ許可を確認してください。";
-      });
     }
+    await scanner.start({ facingMode:'environment' }, {
+      fps:20,
+      qrbox:(w, h) => ({ width:Math.min(320, Math.floor(w * .85)), height:Math.min(130, Math.floor(h * .45)) })
+    }, text => handleCode(text, 'camera'));
+    camState = 'on';
+  }catch(e){
+    camState = 'off';
+    toast('カメラを起動できません。ブラウザのカメラ許可を確認してください','ng');
+  }
+  renderCam();
+}
+async function stopCamera(){
+  if(scanner && camState !== 'off'){ try{ await scanner.stop(); }catch(e){} }
+  camState = 'off'; renderCam();
+}
+function pauseCamera(){ if(camState === 'on'){ try{ scanner.pause(true); camState = 'paused'; }catch(e){} } }
+function resumeCamera(){ if(camState === 'paused'){ try{ scanner.resume(); camState = 'on'; }catch(e){} } }
+function toggleCamera(){ camState === 'off' ? startCamera() : stopCamera(); }
+function renderCam(){
+  document.getElementById('cam-off').hidden = camState !== 'off';
+  document.getElementById('cam-toggle').textContent = camState === 'off' ? 'カメラを起動' : 'カメラを停止';
+}
+// 別アプリに切り替えたらカメラを止めて電池を節約
+document.addEventListener('visibilitychange', () => {
+  if(document.hidden) stopCamera();
+  else if(currentView === 'scan' && settings.url) startCamera();
+});
 
-    function onScanSuccess(decodedText) {
-      if (isProcessing) return;
-      isProcessing = true;
+/* ========== 画面 ========== */
+let currentView = 'scan', listFilter = 'all';
+function showView(v){
+  currentView = v;
+  document.querySelectorAll('.view').forEach(s => s.hidden = s.id !== 'view-' + v);
+  document.querySelectorAll('nav button').forEach(b =>
+    b.dataset.view === v ? b.setAttribute('aria-current','page') : b.removeAttribute('aria-current'));
+  document.querySelector('nav').hidden = v === 'setup';
+  if(v === 'scan') startCamera(); else stopCamera();
+  renderAll();
+  window.scrollTo(0, 0);
+}
+function setLocation(loc){
+  session.location = loc; saveSession();
+  document.documentElement.dataset.loc = loc;
+  document.querySelectorAll('.loc-switch button').forEach(b => b.setAttribute('aria-pressed', b.dataset.loc === loc));
+  renderAll();
+}
+function setMode(m){
+  session.mode = m; saveSession();
+  document.querySelectorAll('[data-mode]').forEach(b => b.setAttribute('aria-pressed', b.dataset.mode === m));
+}
+function setFilter(f){ listFilter = f; renderList(); }
 
-      playBeep();
-      // スキャン成功したらカメラを一時停止して負荷を下げる
-      if (html5QrCode && html5QrCode.isScanning) {
-        html5QrCode.pause(true);
-      }
+function diffHtml(diff){
+  const el = document.createElement('span');
+  el.className = diff > 0 ? 'plus' : diff < 0 ? 'minus' : 'zero';
+  el.textContent = diff > 0 ? `+${diff} 多い` : diff < 0 ? `${diff} 足りない` : '一致';
+  return el;
+}
 
-      document.getElementById('status-msg').innerText = `読み取り完了 (${decodedText}) データ照会中...`;
+function renderReadout(){
+  const box = document.getElementById('readout');
+  if(!currentJan){ box.hidden = true; return; }
+  box.hidden = false;
+  const it = master.items[currentJan];
+  const c = getCount(currentJan);
+  box.classList.toggle('unknown', !it);
+  document.getElementById('ro-jan').textContent = currentJan;
+  document.getElementById('ro-name').textContent = it ? it.name : '未登録の商品（スプレッドシートに登録してください）';
+  document.getElementById('ro-count').textContent = c;
+  document.getElementById('ro-loc').textContent = `${session.location}でのカウント`;
+  const sys = it ? it[sysKey(session.location)] : null;
+  document.getElementById('ro-system').textContent = sys === null ? '-' : sys;
+  const d = document.getElementById('ro-diff');
+  d.replaceChildren(sys === null ? document.createTextNode('-') : diffHtml(c - sys));
+}
 
-      fetch(`${gasUrl}?barcode=${decodedText}`)
-        .then(res => res.json())
-        .then(data => {
-          if (data.status === 'success') {
-            currentData = {
-              barcode: decodedText,
-              name: data.name,
-              stock_warehouse: parseInt(data.stock_warehouse) || 0,
-              stock_store: parseInt(data.stock_store) || 0
-            };
-            document.getElementById('display-barcode').innerText = currentData.barcode;
-            document.getElementById('display-name').innerText = currentData.name;
-            document.getElementById('stock-warehouse').innerText = currentData.stock_warehouse;
-            document.getElementById('stock-store').innerText = currentData.stock_store;
-            document.getElementById('input-actual').value = "";
-            document.getElementById('display-diff').innerText = "-";
-            document.getElementById('product-panel').style.display = 'block';
-            document.getElementById('resume-btn').style.display = 'block';
-            document.getElementById('status-msg').innerText = "在庫数を入力してください";
-            document.getElementById('input-actual').focus();
-          } else {
-            alert(`未登録の商品です (${decodedText})`);
-            resumeScanning();
-          }
-        })
-        .catch(err => {
-          alert("通信エラーが発生しました。");
-          resumeScanning();
-        });
-    }
+function renderStats(){
+  const counts = session.counts[session.location];
+  const jans = Object.keys(counts);
+  const total = jans.reduce((s, j) => s + counts[j], 0);
+  const masterJans = Object.keys(master.items);
+  const left = masterJans.filter(j => counts[j] === undefined).length;
+  document.getElementById('st-items').textContent = jans.length;
+  document.getElementById('st-total').textContent = total;
+  document.getElementById('st-left').textContent = left;
+  const pct = masterJans.length ? (masterJans.length - left) / masterJans.length * 100 : 0;
+  document.getElementById('st-bar').style.width = pct + '%';
+}
 
-    function resumeScanning() {
-      isProcessing = false;
-      currentData = {};
-      document.getElementById('product-panel').style.display = 'none';
-      document.getElementById('resume-btn').style.display = 'none';
-      document.getElementById('status-msg').innerText = "バーコードを枠内に合わせてください";
-      if (html5QrCode) {
-        html5QrCode.resume();
-      }
-    }
+function makeItemRow(jan, loc, qtyText, onTap, isUnknown){
+  const it = master.items[jan];
+  const li = document.createElement('li');
+  const b = document.createElement('button');
+  b.className = 'item-btn'; b.onclick = onTap;
+  const left = document.createElement('div');
+  const nm = document.createElement('div'); nm.className = 'item-name';
+  nm.textContent = it ? it.name : '未登録の商品';
+  if(isUnknown){ const t = document.createElement('span'); t.className = 'tag'; t.textContent = '未登録'; nm.append(t); }
+  const sub = document.createElement('div'); sub.className = 'item-sub num'; sub.textContent = jan;
+  left.append(nm, sub);
+  const right = document.createElement('div'); right.className = 'item-qty num';
+  const q = document.createElement('b'); q.textContent = qtyText;
+  right.append(q);
+  if(it && session.counts[loc][jan] !== undefined){
+    const s = document.createElement('span');
+    s.append(`帳簿${it[sysKey(loc)]} `, diffHtml(session.counts[loc][jan] - it[sysKey(loc)]));
+    right.append(s);
+  }else if(it){
+    const s = document.createElement('span'); s.textContent = `帳簿${it[sysKey(loc)]}`; right.append(s);
+  }
+  b.append(left, right); li.append(b);
+  return li;
+}
 
-    function calcDiff() {
-      const actualVal = document.getElementById('input-actual').value;
-      if (actualVal === "") {
-        document.getElementById('display-diff').innerText = "-";
-        return;
-      }
-      const actualStock = parseInt(actualVal);
-      const location = document.getElementById('location-select').value;
-      const systemStock = (location === "倉庫") ? currentData.stock_warehouse : currentData.stock_store;
-      const diff = actualStock - systemStock;
-      const diffEl = document.getElementById('display-diff');
+function renderList(){
+  const loc = session.location;
+  document.getElementById('list-title').textContent = `${loc}のカウント一覧`;
+  document.getElementById('send-loc').textContent = loc;
+  document.querySelectorAll('[data-filter]').forEach(c => c.setAttribute('aria-pressed', c.dataset.filter === listFilter));
+  const ul = document.getElementById('count-list'); ul.replaceChildren();
+  const counts = session.counts[loc];
+  let jans = Object.keys(counts);
+  if(listFilter === 'diff') jans = jans.filter(j => { const it = master.items[j]; return !it || counts[j] !== it[sysKey(loc)]; });
+  if(listFilter === 'unknown') jans = jans.filter(j => !master.items[j]);
+  jans.sort((a, b) => (master.items[a]?.name || '').localeCompare(master.items[b]?.name || '', 'ja'));
+  if(!jans.length){
+    const li = document.createElement('li'); li.className = 'empty';
+    li.textContent = Object.keys(counts).length ? '条件に合う商品はありません' : 'まだ何も数えていません。スキャン画面から始めましょう';
+    ul.append(li); return;
+  }
+  jans.forEach(j => ul.append(makeItemRow(j, loc, `${counts[j]}個`, () => openQty(j, loc), !master.items[j])));
+  renderSentInfo();
+}
 
-      diffEl.innerText = diff > 0 ? `+${diff} (過剰)` : diff < 0 ? `${diff} (不足)` : `0 (一致)`;
-      diffEl.style.color = diff !== 0 ? "red" : "green";
-    }
+function renderLeft(){
+  const loc = session.location;
+  const q = document.getElementById('search').value.trim().toLowerCase();
+  const ul = document.getElementById('left-list'); ul.replaceChildren();
+  const counts = session.counts[loc];
+  let jans = Object.keys(master.items);
+  if(q){
+    document.getElementById('left-title').textContent = '検索結果';
+    jans = jans.filter(j => j.includes(q) || (master.items[j].name || '').toLowerCase().includes(q));
+  }else{
+    document.getElementById('left-title').textContent = `${loc}でまだ数えていない商品`;
+    jans = jans.filter(j => counts[j] === undefined);
+    jans.sort((a, b) => master.items[b][sysKey(loc)] - master.items[a][sysKey(loc)]); // 帳簿在庫が多い順
+  }
+  if(!master.updatedAt){
+    const li = document.createElement('li'); li.className = 'empty'; li.textContent = '商品データがありません。設定から取得してください'; ul.append(li); return;
+  }
+  if(!jans.length){
+    const li = document.createElement('li'); li.className = 'empty';
+    li.textContent = q ? '見つかりませんでした' : 'すべての商品を数え終わりました'; ul.append(li); return;
+  }
+  jans.slice(0, 200).forEach(j => {
+    const c = counts[j];
+    ul.append(makeItemRow(j, loc, c === undefined ? '未' : `${c}個`, () => openQty(j, loc), false));
+  });
+}
 
-    function submitInventory() {
-      const actualVal = document.getElementById('input-actual').value;
-      if (actualVal === "") return alert("実在庫数を入力してください。");
+function renderPill(){
+  const p = document.getElementById('sync-pill');
+  p.classList.toggle('alert', queue.length > 0);
+  if(flushing) p.textContent = '送信中…';
+  else if(queue.length) p.textContent = `未送信 ${queue.length}件`;
+  else if(!navigator.onLine) p.textContent = 'オフライン';
+  else p.textContent = '同期済み';
+}
+window.addEventListener('offline', renderPill);
 
-      const btn = document.getElementById('submit-btn');
-      btn.disabled = true;
-      document.getElementById('status-msg').innerText = "記録中...";
+function renderSentInfo(){
+  const s = session.sent[session.location];
+  document.getElementById('sent-info').textContent = s ? `最終送信：${new Date(s).toLocaleString('ja-JP')}` : '';
+}
 
-      const location = document.getElementById('location-select').value;
-      const systemStock = (location === "倉庫") ? currentData.stock_warehouse : currentData.stock_store;
-      const actualStock = parseInt(actualVal);
+function renderSettings(){
+  document.getElementById('master-info').textContent = master.updatedAt
+    ? `${Object.keys(master.items).length}件　最終取得 ${new Date(master.updatedAt).toLocaleString('ja-JP')}` : 'まだ取得していません';
+  document.getElementById('set-cooldown').value = String(settings.cooldown);
+  document.getElementById('set-sound').checked = settings.sound;
+  const all = LOCS.reduce((s, l) => s + Object.keys(session.counts[l]).length, 0);
+  document.getElementById('session-info').textContent =
+    `開始 ${new Date(session.startedAt).toLocaleString('ja-JP')}　店舗${Object.keys(session.counts['店舗']).length}品目・倉庫${Object.keys(session.counts['倉庫']).length}品目（計${all}）`;
+  document.getElementById('conn-info').textContent = `担当者：${settings.staff || '未設定'}`;
+}
 
-      fetch(gasUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify({
-          barcode: currentData.barcode,
-          name: currentData.name,
-          location: location,
-          systemStock: systemStock,
-          actualStock: actualStock,
-          diff: actualStock - systemStock
-        })
-      })
-      .then(res => res.json())
-      .then(data => {
-        if (data.status === 'success') {
-          resumeScanning();
-          document.getElementById('status-msg').innerText = "記録しました！次のバーコードをどうぞ";
-        }
-      })
-      .finally(() => {
-        btn.disabled = false;
-      });
-    }
-  </script>
+function renderAll(){
+  renderReadout(); renderStats(); renderPill();
+  if(currentView === 'list') renderList();
+  if(currentView === 'left') renderLeft();
+  if(currentView === 'settings') renderSettings();
+}
+
+/* ========== 送信・設定 ========== */
+function sendResults(){
+  const loc = session.location;
+  const counts = session.counts[loc];
+  const key = sysKey(loc);
+  const records = Object.keys(counts).map(j => {
+    const it = master.items[j];
+    const system = it ? it[key] : 0;
+    return { jan:j, name:it ? it.name : '未登録', system, actual:counts[j], diff:counts[j] - system };
+  });
+  if(document.getElementById('send-zero').checked){
+    Object.keys(master.items).forEach(j => {
+      const it = master.items[j];
+      if(counts[j] === undefined && it[key] !== 0) records.push({ jan:j, name:it.name, system:it[key], actual:0, diff:-it[key] });
+    });
+  }
+  if(!records.length){ toast('送信するデータがありません','warn'); return; }
+  const diffs = records.filter(r => r.diff !== 0).length;
+  if(!confirm(`${loc}の棚卸結果 ${records.length}件（差異あり${diffs}件）を送信しますか？`)) return;
+  queue.push({ action:'submit', submissionId:makeId(), sessionId:session.id, staff:settings.staff,
+               location:loc, countedAt:new Date().toISOString(), records });
+  saveQueue();
+  flushQueue();
+}
+
+function startNewSession(){
+  if(queue.length){ toast('未送信のデータがあります。先に送信してください','ng'); return; }
+  if(!confirm('今回のカウントをすべて消去して、新しい棚卸を始めますか？')) return;
+  const loc = session.location;
+  session = newSession(); session.location = loc; saveSession();
+  currentJan = null;
+  setLocation(loc); setMode(session.mode);
+  syncMaster(true);
+  toast('新しい棚卸を始めました');
+}
+
+function exportCsv(){
+  const rows = [['場所','JAN','商品名','帳簿在庫','実在庫','差異']];
+  LOCS.forEach(loc => Object.keys(session.counts[loc]).forEach(j => {
+    const it = master.items[j]; const sys = it ? it[sysKey(loc)] : '';
+    const c = session.counts[loc][j];
+    rows.push([loc, j, it ? it.name : '未登録', sys, c, it ? c - sys : '']);
+  }));
+  const csv = '\uFEFF' + rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\r\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type:'text/csv' }));
+  a.download = `棚卸_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+function saveOptions(){
+  settings.cooldown = Number(document.getElementById('set-cooldown').value);
+  settings.sound = document.getElementById('set-sound').checked;
+  LS.set('tana_settings', settings);
+}
+
+function showSetup(){
+  document.getElementById('set-url').value = settings.url;
+  document.getElementById('set-token').value = settings.token;
+  document.getElementById('set-staff').value = settings.staff;
+  showView('setup');
+}
+async function saveSetup(){
+  const url = document.getElementById('set-url').value.trim();
+  if(!/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec/.test(url)){
+    toast('URLは https://script.google.com/macros/s/…/exec の形で入力してください','ng'); return;
+  }
+  settings.url = url;
+  settings.token = document.getElementById('set-token').value.trim();
+  settings.staff = document.getElementById('set-staff').value.trim();
+  LS.set('tana_settings', settings);
+  localStorage.removeItem('gas_app_url');
+  await syncMaster(true);
+  if(master.updatedAt) showView('scan');
+}
+
+/* ========== 起動 ========== */
+setLocation(session.location);
+setMode(session.mode);
+renderCam();
+if(settings.url){
+  showView('scan');
+  if(navigator.onLine) syncMaster(false);
+  flushQueue();
+}else{
+  showSetup();
+}
+</script>
 </body>
 </html>
