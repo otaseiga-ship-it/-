@@ -30,6 +30,7 @@
   :root[data-loc="倉庫"]{ --loc:#F0A040; --loc-soft:#36270F; }
 }
 *,*::before,*::after{ box-sizing:inherit; }
+[hidden]{ display:none !important; } /* 非表示指定が他のdisplay指定に負けないように */
 html{ scroll-padding-top:env(safe-area-inset-top,0px); }
 body{ margin:0; background:var(--bg); color:var(--ink); font-family:var(--font); font-size:16px; line-height:1.5; -webkit-tap-highlight-color:transparent; }
 button,input,select{ font:inherit; color:inherit; }
@@ -180,7 +181,9 @@ nav button[aria-current="page"]{ color:var(--loc); font-weight:700; }
     </div>
     <div class="cam-bar">
       <button class="btn" id="cam-toggle" onclick="toggleCamera()">カメラを停止</button>
+      <button class="btn" onclick="cycleCamera()">レンズを切り替え</button>
     </div>
+    <p class="hint" id="cam-label" style="margin-top:-4px"></p>
 
     <div class="row" style="margin-bottom:12px">
       <input class="field" id="manual-code" inputmode="numeric" autocomplete="off" placeholder="JANを手入力（外付けスキャナーもここ）" enterkeyhint="done">
@@ -259,6 +262,14 @@ nav button[aria-current="page"]{ color:var(--loc); font-weight:700; }
       <button class="btn" style="width:100%" onclick="syncMaster(true)">スプレッドシートから再取得</button>
     </div>
     <div class="block">
+      <h2>使用するカメラ</h2>
+      <p class="hint">望遠や超広角で読みにくい場合は、ふつうの背面カメラ（「広角」「camera2 0」など）を選んでください。</p>
+      <select class="field" id="set-camera" onchange="saveCamera()">
+        <option value="">自動（望遠・超広角を避けて背面カメラを選ぶ）</option>
+      </select>
+      <button class="btn" style="width:100%" onclick="loadCameraList(true)">カメラ一覧を読み込み直す</button>
+    </div>
+    <div class="block">
       <h2>読み取り</h2>
       <label class="lbl" for="set-cooldown">同じバーコードを続けて数えるまでの間隔</label>
       <select class="field" id="set-cooldown" onchange="saveOptions()">
@@ -318,7 +329,7 @@ const LS = {
 const LOCS = ['店舗','倉庫'];
 const makeId = () => Date.now().toString(36) + Math.random().toString(36).slice(2,8);
 
-let settings = LS.get('tana_settings', { url:'', token:'', staff:'', cooldown:1, sound:true });
+let settings = LS.get('tana_settings', { url:'', token:'', staff:'', cooldown:1, sound:true, cameraId:'' });
 if(!settings.url){ const old = localStorage.getItem('gas_app_url'); if(old) settings.url = old; } // 旧版からの引き継ぎ
 let master  = LS.get('tana_master', { updatedAt:null, items:{} });
 let session = LS.get('tana_session', null) || newSession();
@@ -553,16 +564,91 @@ async function startCamera(){
         verbose:false
       });
     }
-    await scanner.start({ facingMode:'environment' }, {
+    camState = 'starting';
+    const config = {
       fps:20,
       qrbox:(w, h) => ({ width:Math.min(320, Math.floor(w * .85)), height:Math.min(130, Math.floor(h * .45)) })
-    }, text => handleCode(text, 'camera'));
+    };
+    const onRead = text => handleCode(text, 'camera');
+    let camId = settings.cameraId || autoCameraId;
+    try{
+      await scanner.start(camId ? camId : { facingMode:'environment' }, config, onRead);
+    }catch(err){
+      if(!camId) throw err;
+      // 保存したカメラが見つからない時（機種変更など）は背面カメラで起動し直す
+      toast('選んだカメラが見つからないため、背面カメラで起動しました','warn');
+      settings.cameraId = ''; LS.set('tana_settings', settings); camId = '';
+      await scanner.start({ facingMode:'environment' }, config, onRead);
+    }
     camState = 'on';
+    activeCamId = camId;
+    // ピント合わせを自動に（対応端末のみ）
+    try{ await scanner.applyVideoConstraints({ advanced:[{ focusMode:'continuous' }] }); }catch(e){}
+    // 初回はカメラ許可後に一覧を取得し、自動モードなら望遠を避けたレンズへ切り替える
+    if(!cameras.length){
+      await loadCameraList(false);
+      if(!settings.cameraId && autoCameraId && autoCameraId !== activeCamId){
+        await stopCamera(); renderCam(); return startCamera();
+      }
+    }
   }catch(e){
     camState = 'off';
     toast('カメラを起動できません。ブラウザのカメラ許可を確認してください','ng');
   }
   renderCam();
+}
+
+/* ---- レンズ選択 ---- */
+let cameras = [], autoCameraId = '', activeCamId = '';
+const BAD_LENS = /tele|望遠|ultra|超広角|front|前面|インカメ|facing front/i;
+const BACK_LENS = /back|rear|背面|environment|facing back/i;
+
+async function loadCameraList(manual){
+  try{
+    // 許可済みなら新たにカメラを開かずに一覧だけ取得できる
+    const devs = await navigator.mediaDevices.enumerateDevices();
+    cameras = devs.filter(d => d.kind === 'videoinput').map(d => ({ id:d.deviceId, label:d.label }));
+    if(!cameras.length || cameras.every(c => !c.label)) cameras = await Html5Qrcode.getCameras();
+  }catch(e){
+    cameras = [];
+    if(manual) toast('カメラ一覧を取得できません。カメラの使用を許可してください','ng');
+    return;
+  }
+  // 自動モードの候補：背面かつ望遠・超広角でないもの → 背面 → 先頭
+  const back = cameras.filter(c => BACK_LENS.test(c.label));
+  const good = (back.length ? back : cameras).filter(c => !BAD_LENS.test(c.label));
+  // Androidは「camera2 0」がメインカメラであることが多い
+  good.sort((a, b) => (/camera2 0\b/.test(b.label) ? 1 : 0) - (/camera2 0\b/.test(a.label) ? 1 : 0));
+  autoCameraId = (good[0] || back[0] || cameras[0] || {}).id || '';
+  renderCameraSelect();
+  if(manual) toast(`カメラを${cameras.length}台見つけました`);
+}
+
+function renderCameraSelect(){
+  const sel = document.getElementById('set-camera');
+  sel.replaceChildren(new Option('自動（望遠・超広角を避けて背面カメラを選ぶ）', ''));
+  cameras.forEach((c, i) => sel.append(new Option(c.label || `カメラ ${i + 1}`, c.id)));
+  sel.value = cameras.some(c => c.id === settings.cameraId) ? settings.cameraId : '';
+}
+
+async function saveCamera(){
+  settings.cameraId = document.getElementById('set-camera').value;
+  LS.set('tana_settings', settings);
+  toast('カメラを変更しました。スキャン画面で反映されます');
+}
+
+// スキャン画面の「レンズを切り替え」：背面カメラを順番に試す
+async function cycleCamera(){
+  if(!cameras.length) await loadCameraList(true);
+  if(cameras.length < 2){ toast('切り替えられるカメラがありません','warn'); return; }
+  const list = cameras.filter(c => !/front|前面|facing front/i.test(c.label));
+  const pool = list.length >= 2 ? list : cameras;
+  const idx = pool.findIndex(c => c.id === activeCamId);
+  const next = pool[(idx + 1) % pool.length];
+  settings.cameraId = next.id; LS.set('tana_settings', settings);
+  await stopCamera();
+  await startCamera();
+  toast(`${next.label || 'カメラ'} に切り替えました（設定に保存済み）`);
 }
 async function stopCamera(){
   if(scanner && camState !== 'off'){ try{ await scanner.stop(); }catch(e){} }
@@ -574,6 +660,9 @@ function toggleCamera(){ camState === 'off' ? startCamera() : stopCamera(); }
 function renderCam(){
   document.getElementById('cam-off').hidden = camState !== 'off';
   document.getElementById('cam-toggle').textContent = camState === 'off' ? 'カメラを起動' : 'カメラを停止';
+  const cam = cameras.find(c => c.id === activeCamId);
+  document.getElementById('cam-label').textContent =
+    camState === 'on' ? `使用中：${cam ? cam.label : '背面カメラ（自動）'}` : '';
 }
 // 別アプリに切り替えたらカメラを止めて電池を節約
 document.addEventListener('visibilitychange', () => {
@@ -734,6 +823,7 @@ function renderSettings(){
     ? `${Object.keys(master.items).length}件　最終取得 ${new Date(master.updatedAt).toLocaleString('ja-JP')}` : 'まだ取得していません';
   document.getElementById('set-cooldown').value = String(settings.cooldown);
   document.getElementById('set-sound').checked = settings.sound;
+  if(cameras.length) renderCameraSelect(); else loadCameraList(false);
   const all = LOCS.reduce((s, l) => s + Object.keys(session.counts[l]).length, 0);
   document.getElementById('session-info').textContent =
     `開始 ${new Date(session.startedAt).toLocaleString('ja-JP')}　店舗${Object.keys(session.counts['店舗']).length}品目・倉庫${Object.keys(session.counts['倉庫']).length}品目（計${all}）`;
