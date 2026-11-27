@@ -139,6 +139,9 @@ nav button[aria-current="page"]{ color:var(--loc); font-weight:700; }
 .entry .row .confirm{ flex:2; font-size:1.25rem; }
 #scan-status{ text-align:center; font-weight:700; color:var(--loc); min-height:1.5em; margin:0 0 10px; }
 #scan-status.warn{ color:var(--warn); }
+.team-alert{ background:var(--warn); color:#fff; border-radius:10px; padding:10px 12px; font-weight:700; font-size:.95rem; margin:8px 0; }
+.who{ display:inline-block; font-size:.7rem; padding:1px 7px; border-radius:999px; background:var(--loc-soft); color:var(--loc); margin-left:4px; vertical-align:middle; font-weight:700; }
+.who.other{ background:var(--warn); color:#fff; }
 
 #toast{ position:fixed; left:50%; bottom:calc(84px + env(safe-area-inset-bottom,0px)); transform:translateX(-50%); z-index:30; background:var(--ink); color:var(--surface); padding:10px 16px; border-radius:10px; font-size:.9rem; max-width:90vw; opacity:0; pointer-events:none; transition:opacity .2s; }
 #toast.show{ opacity:1; }
@@ -212,16 +215,16 @@ nav button[aria-current="page"]{ color:var(--loc); font-weight:700; }
         <span id="ro-loc"></span>
         <span>
           <button class="linkbtn" onclick="openQty(currentJan)">入力し直す</button>
-          <button class="linkbtn" style="margin-left:12px" onclick="undo()">取り消す</button>
         </span>
       </div>
     </div>
 
     <div class="stats">
-      <div class="stat"><b class="num" id="st-items">0</b><span>数えた品目</span></div>
-      <div class="stat"><b class="num" id="st-total">0</b><span>合計個数</span></div>
+      <div class="stat"><b class="num" id="st-mine">0</b><span>自分が数えた</span></div>
+      <div class="stat"><b class="num" id="st-items">0</b><span>全員で数えた</span></div>
       <div class="stat"><b class="num" id="st-left">0</b><span>未カウント</span><div class="progress"><i id="st-bar"></i></div></div>
     </div>
+    <p class="hint" id="team-info" style="text-align:center;margin-top:8px"></p>
   </section>
 
   <!-- 一覧 -->
@@ -229,20 +232,17 @@ nav button[aria-current="page"]{ color:var(--loc); font-weight:700; }
     <div class="block">
       <h2 id="list-title">カウント一覧</h2>
       <div class="chips" role="group" aria-label="絞り込み">
-        <button class="chip" data-filter="all" onclick="setFilter('all')">すべて</button>
+        <button class="chip" data-filter="all" onclick="setFilter('all')">全員の分</button>
+        <button class="chip" data-filter="mine" onclick="setFilter('mine')">自分の分</button>
         <button class="chip" data-filter="diff" onclick="setFilter('diff')">差異あり</button>
       </div>
       <ul class="list" id="count-list"></ul>
     </div>
     <div class="block">
-      <h2>結果を送信</h2>
-      <p class="hint">送信はこの場所（<span id="send-loc"></span>）の分だけです。電波がなくても端末に保存され、つながった時に自動で送られます。</p>
-      <label style="display:flex;gap:8px;align-items:flex-start;font-size:.9rem;margin-bottom:12px">
-        <input type="checkbox" id="send-zero" checked style="margin-top:4px">
-        <span>読み取らなかった商品（帳簿在庫が1以上）を実在庫0個として記録する</span>
-      </label>
-      <button class="btn primary" style="width:100%" onclick="sendResults()">この場所の棚卸結果を送信</button>
-      <p class="hint" id="sent-info"></p>
+      <h2>棚卸を締める</h2>
+      <p class="hint">入力した数は、確定するたびに自動でスプレッドシートへ送られます（圏外の時は電波が戻ってから）。<br>
+      全員が数え終わったら、最後に1人だけこのボタンを押してください。<span id="send-loc"></span>で<b>誰も数えていない</b>商品（帳簿在庫が1以上）を、実在庫0個として記録します。</p>
+      <button class="btn primary" style="width:100%" onclick="closeOut()">未カウント商品を0個として記録</button>
     </div>
   </section>
 
@@ -255,6 +255,7 @@ nav button[aria-current="page"]{ color:var(--loc); font-weight:700; }
     </div>
     <div class="block">
       <h2 id="left-title">まだ数えていない商品</h2>
+      <p class="hint">他の人が数えた商品も、自動で一覧から消えます。</p>
       <ul class="list" id="left-list"></ul>
     </div>
   </section>
@@ -313,6 +314,7 @@ nav button[aria-current="page"]{ color:var(--loc); font-weight:700; }
   <div class="sheet entry" role="dialog" aria-modal="true" aria-labelledby="qty-name">
     <div class="ro-jan num" id="qty-jan"></div>
     <div class="ro-name" id="qty-name" style="margin-bottom:0"></div>
+    <div class="team-alert" id="qty-team" hidden></div>
     <div class="entry-figs">
       <div class="fig"><span>帳簿在庫</span><b class="num" id="qty-system">-</b></div>
       <div class="fig input"><span>実在庫</span><b class="num" id="qty-display">0</b></div>
@@ -351,6 +353,13 @@ if(!settings.url){ const old = localStorage.getItem('gas_app_url'); if(old) sett
 let master  = LS.get('tana_master', { updatedAt:null, items:{} });
 let session = LS.get('tana_session', null) || newSession();
 let queue   = LS.get('tana_queue', []);
+// 旧形式（まとめ送信）の未送信データを、1件ずつの形式に変換
+queue = queue.flatMap(q => q.records
+  ? q.records.map((r, i) => ({ id:(q.submissionId || makeId()) + '-' + i, location:q.location, ...r }))
+  : [q]);
+// 全員のカウント状況（スプレッドシートから定期取得）
+let team = LS.get('tana_team', { sessionId:'', at:null, items:{} });
+if(team.sessionId !== session.id) team = { sessionId:session.id, at:null, items:{} };
 
 function newSession(){
   return { id:makeId(), startedAt:new Date().toISOString(), location:'店舗', mode:'count',
@@ -376,7 +385,7 @@ function beep(kind){
   if(!settings.sound) return;
   try{
     unlockAudio(); if(!audioCtx) return;
-    const tones = kind === 'ng' ? [[400,.12],[300,.18]] : [[1250,.08]];
+    const tones = kind === 'ng' ? [[400,.12],[300,.18]] : kind === 'dup' ? [[880,.09],[880,.09]] : [[1250,.08]];
     let t = audioCtx.currentTime;
     tones.forEach(([f,d]) => {
       const o = audioCtx.createOscillator(), g = audioCtx.createGain();
@@ -385,7 +394,7 @@ function beep(kind){
       o.connect(g); g.connect(audioCtx.destination);
       o.start(t); o.stop(t + d); t += d + .03;
     });
-    if(navigator.vibrate) navigator.vibrate(kind === 'ng' ? [80,60,80] : 60);
+    if(navigator.vibrate) navigator.vibrate(kind === 'ok' ? 60 : [80,60,80]);
   }catch(e){}
 }
 
@@ -442,34 +451,79 @@ async function lookupOne(jan){
   return false;
 }
 
-/* ========== 送信キュー（圏外でも消えない） ========== */
-let flushing = false;
+/* ========== 送信キュー（確定ごとに自動送信・圏外でも消えない） ========== */
+let flushing = false, flushTimer, lastError = 0;
+function enqueueRecord(jan, loc, actual){
+  const it = master.items[jan];
+  const system = it ? it[sysKey(loc)] : 0;
+  queue.push({ id:makeId(), location:loc, jan, name:it ? it.name : '', system, actual, diff:actual - system });
+  saveQueue();
+  clearTimeout(flushTimer);
+  flushTimer = setTimeout(() => flushQueue(), 1500); // 続けて入力した分はまとめて送る
+}
 async function flushQueue(manual){
   if(flushing) return;
-  if(!queue.length){ if(manual) toast('未送信のデータはありません'); return; }
-  if(!navigator.onLine){ if(manual) toast('オフラインです。電波のある場所で再送されます','warn'); return; }
+  if(!queue.length){ if(manual){ toast('未送信のデータはありません'); pullTeam(); } return; }
+  if(!navigator.onLine){ if(manual) toast('オフラインです。電波のある場所で自動送信されます','warn'); return; }
   flushing = true; renderPill();
   try{
     while(queue.length){
-      const job = queue[0];
-      await api('POST', null, job);
-      queue.shift(); saveQueue();
-      session.sent[job.location] = new Date().toISOString(); saveSession();
-      toast(`${job.location}の棚卸結果を送信しました（${job.records.length}件）`);
+      const batch = queue.slice(0, 100);
+      const d = await api('POST', null, { action:'submit', sessionId:session.id, sessionStartedAt:session.startedAt,
+                                         staff:settings.staff, records:batch });
+      queue.splice(0, batch.length); saveQueue();
+      if(d.team) applyTeam(d.team);
     }
+    if(manual) toast('送信しました');
   }catch(e){
-    toast('送信できませんでした。自動で再送します：' + e.message, 'ng');
+    if(manual || Date.now() - lastError > 60000) toast('送信できませんでした。自動で再送します：' + e.message, 'ng');
+    lastError = Date.now();
   }finally{
-    flushing = false; renderPill(); renderSentInfo();
+    flushing = false; renderPill();
   }
 }
 window.addEventListener('online', () => flushQueue());
 setInterval(() => { if(queue.length) flushQueue(); }, 30000);
 
+const teamKey = (loc, jan) => `${loc}|${jan}`;
+const teamInfo = (jan, loc=session.location) => team.items[teamKey(loc, jan)] || null;
+function applyTeam(list){
+  const items = {};
+  list.forEach(r => { items[teamKey(r.location, String(r.jan))] = { actual:r.actual, staff:r.staff, time:r.time, times:r.times }; });
+  team = { sessionId:session.id, at:new Date().toISOString(), items };
+  LS.set('tana_team', team);
+  renderAll();
+}
+let pulling = false;
+async function pullTeam(){
+  if(pulling || !settings.url || !navigator.onLine) return;
+  pulling = true;
+  try{
+    const d = await api('GET', { action:'status', startedAt:session.startedAt });
+    applyTeam(d.items || []);
+  }catch(e){}finally{ pulling = false; }
+}
+// 20秒ごとに、他の人のカウント状況を取得
+setInterval(() => { if(!document.hidden && !flushing) pullTeam(); }, 20000);
+
 /* ========== カウント処理 ========== */
 let currentJan = null, lastCode = '', lastTime = 0;
 const sysKey = loc => loc === '倉庫' ? 'warehouse' : 'store';
 const getCount = (jan, loc=session.location) => session.counts[loc][jan] || 0;
+// 最新の確定数（自分の入力 → 全員の記録の順で探す）
+function latest(jan, loc=session.location){
+  const mine = session.counts[loc][jan];
+  if(mine !== undefined) return { actual:mine, staff:settings.staff, mine:true };
+  const t = teamInfo(jan, loc);
+  return t ? { ...t, mine:t.staff === settings.staff } : null;
+}
+const isCounted = (jan, loc=session.location) => !!latest(jan, loc);
+function countedJans(loc=session.location){
+  const set = new Set(Object.keys(session.counts[loc]));
+  Object.keys(team.items).forEach(k => { const [l, j] = k.split('|'); if(l === loc) set.add(j); });
+  return [...set];
+}
+const fmtTime = iso => iso ? new Date(iso).toLocaleTimeString('ja-JP', { hour:'2-digit', minute:'2-digit' }) : '';
 
 function setCount(jan, value, loc=session.location){
   value = Math.max(0, Math.floor(Number(value) || 0));
@@ -521,24 +575,13 @@ async function handleCode(raw, source){
   }
 
   lastCode = jan; lastTime = now; lastSource = source;
-  beep('ok');
+  const done = latest(jan);
+  beep(done && !done.mine ? 'dup' : 'ok');
   pauseCamera();
   setScanStatus('在庫数を入力してください');
   currentJan = jan;
   renderReadout();
   openQty(jan);
-}
-
-function undo(){
-  const h = session.history.pop();
-  if(!h){ toast('取り消せる操作はありません'); return; }
-  if(h.before === null) delete session.counts[h.loc][h.jan];
-  else session.counts[h.loc][h.jan] = h.before;
-  saveSession();
-  if(h.loc !== session.location) setLocation(h.loc);
-  currentJan = h.jan;
-  toast('直前の操作を取り消しました');
-  renderAll();
 }
 
 function submitManual(){
@@ -559,10 +602,16 @@ function openQty(jan, loc){
   const it = master.items[jan];
   document.getElementById('qty-jan').textContent = `${qtyLoc}　${jan}`;
   document.getElementById('qty-name').textContent = it ? it.name : jan;
-  const prev = session.counts[qtyLoc][jan];
-  document.getElementById('qty-note').hidden = prev === undefined;
+  const prev = latest(jan, qtyLoc);
+  const alert = document.getElementById('qty-team');
+  alert.hidden = !prev || prev.mine;
+  if(prev && !prev.mine){
+    alert.textContent = `⚠ ${prev.staff}さんが ${prev.actual}個 で入力済み${prev.time ? '（' + fmtTime(prev.time) + '）' : ''}。数え直す場合だけ入力してください`;
+  }
+  document.getElementById('qty-note').hidden = !prev;
   document.getElementById('qty-addmode').checked = false;
-  document.getElementById('qty-note-text').textContent = `入力済み ${prev}個。チェックすると、その数に足します（別の棚にもある時）`;
+  if(prev) document.getElementById('qty-note-text').textContent =
+    `${prev.mine ? '自分が' : prev.staff + 'さんが'}入力済み ${prev.actual}個。チェックすると、その数に足します（別の棚にもある時）`;
   renderQty();
   document.getElementById('qty-modal').hidden = false;
   if(document.activeElement) document.activeElement.blur(); // スマホのキーボードを出さない
@@ -570,8 +619,8 @@ function openQty(jan, loc){
 function qtyResult(){
   if(qtyBuf === '') return null;
   const n = Number(qtyBuf);
-  const prev = session.counts[qtyLoc][qtyJan] || 0;
-  return document.getElementById('qty-addmode').checked ? prev + n : n;
+  const prev = latest(qtyJan, qtyLoc);
+  return document.getElementById('qty-addmode').checked ? (prev ? prev.actual : 0) + n : n;
 }
 function renderQty(){
   const it = master.items[qtyJan];
@@ -599,6 +648,7 @@ function applyQty(){
   const v = qtyResult();
   if(v === null){ toast('実在庫数を入力してください','warn'); return; }
   setCount(qtyJan, v, qtyLoc);
+  enqueueRecord(qtyJan, qtyLoc, v); // 確定したらすぐ送信（他の人の画面にも反映される）
   const it = master.items[qtyJan];
   toast(`${it ? it.name : qtyJan}：${v}個で記録しました`);
   currentJan = qtyJan;
@@ -745,7 +795,10 @@ function renderCam(){
 // 別アプリに切り替えたらカメラを止めて電池を節約
 document.addEventListener('visibilitychange', () => {
   if(document.hidden) stopCamera();
-  else if(currentView === 'scan' && settings.url) startCamera();
+  else{
+    if(settings.url) pullTeam();
+    if(currentView === 'scan' && settings.url) startCamera();
+  }
 });
 
 /* ========== 画面 ========== */
@@ -792,38 +845,45 @@ function renderReadout(){
 }
 
 function renderStats(){
-  const counts = session.counts[session.location];
-  const jans = Object.keys(counts);
-  const total = jans.reduce((s, j) => s + counts[j], 0);
+  const loc = session.location;
+  const counted = new Set(countedJans(loc));
   const masterJans = Object.keys(master.items);
-  const left = masterJans.filter(j => counts[j] === undefined).length;
-  document.getElementById('st-items').textContent = jans.length;
-  document.getElementById('st-total').textContent = total;
+  const left = masterJans.filter(j => !counted.has(j)).length;
+  document.getElementById('st-mine').textContent = Object.keys(session.counts[loc]).length;
+  document.getElementById('st-items').textContent = counted.size;
   document.getElementById('st-left').textContent = left;
   const pct = masterJans.length ? (masterJans.length - left) / masterJans.length * 100 : 0;
   document.getElementById('st-bar').style.width = pct + '%';
+  document.getElementById('team-info').textContent = team.at
+    ? `全員の状況：${fmtTime(team.at)} 更新（20秒ごとに自動更新）` : '全員の状況：まだ取得していません';
 }
 
-function makeItemRow(jan, loc, qtyText, onTap, isUnknown){
+function makeItemRow(jan, loc, onTap){
   const it = master.items[jan];
+  const info = latest(jan, loc);
   const li = document.createElement('li');
   const b = document.createElement('button');
   b.className = 'item-btn'; b.onclick = onTap;
   const left = document.createElement('div');
   const nm = document.createElement('div'); nm.className = 'item-name';
-  nm.textContent = it ? it.name : '未登録の商品';
-  if(isUnknown){ const t = document.createElement('span'); t.className = 'tag'; t.textContent = '未登録'; nm.append(t); }
-  const sub = document.createElement('div'); sub.className = 'item-sub num'; sub.textContent = jan;
+  nm.textContent = it ? it.name : jan;
+  if(info){
+    const w = document.createElement('span');
+    w.className = 'who' + (info.mine ? '' : ' other');
+    w.textContent = info.mine ? '自分' : info.staff;
+    nm.append(w);
+  }
+  const sub = document.createElement('div'); sub.className = 'item-sub num';
+  sub.textContent = jan + (info && info.time ? `　${fmtTime(info.time)}` : '');
   left.append(nm, sub);
   const right = document.createElement('div'); right.className = 'item-qty num';
-  const q = document.createElement('b'); q.textContent = qtyText;
+  const q = document.createElement('b'); q.textContent = info ? `${info.actual}個` : '未';
   right.append(q);
-  if(it && session.counts[loc][jan] !== undefined){
+  if(it){
     const s = document.createElement('span');
-    s.append(`帳簿${it[sysKey(loc)]} `, diffHtml(session.counts[loc][jan] - it[sysKey(loc)]));
+    s.append(`帳簿${it[sysKey(loc)]} `);
+    if(info) s.append(diffHtml(info.actual - it[sysKey(loc)]));
     right.append(s);
-  }else if(it){
-    const s = document.createElement('span'); s.textContent = `帳簿${it[sysKey(loc)]}`; right.append(s);
   }
   b.append(left, right); li.append(b);
   return li;
@@ -835,31 +895,28 @@ function renderList(){
   document.getElementById('send-loc').textContent = loc;
   document.querySelectorAll('[data-filter]').forEach(c => c.setAttribute('aria-pressed', c.dataset.filter === listFilter));
   const ul = document.getElementById('count-list'); ul.replaceChildren();
-  const counts = session.counts[loc];
-  let jans = Object.keys(counts);
-  if(listFilter === 'diff') jans = jans.filter(j => { const it = master.items[j]; return !it || counts[j] !== it[sysKey(loc)]; });
+  let jans = listFilter === 'mine' ? Object.keys(session.counts[loc]) : countedJans(loc);
+  if(listFilter === 'diff') jans = jans.filter(j => { const it = master.items[j]; return it && latest(j, loc).actual !== it[sysKey(loc)]; });
   jans.sort((a, b) => (master.items[a]?.name || '').localeCompare(master.items[b]?.name || '', 'ja'));
   if(!jans.length){
     const li = document.createElement('li'); li.className = 'empty';
-    li.textContent = Object.keys(counts).length ? '条件に合う商品はありません' : 'まだ何も数えていません。スキャン画面から始めましょう';
+    li.textContent = listFilter === 'all' ? 'まだ誰も数えていません' : '条件に合う商品はありません';
     ul.append(li); return;
   }
-  jans.forEach(j => ul.append(makeItemRow(j, loc, `${counts[j]}個`, () => openQty(j, loc), !master.items[j])));
-  renderSentInfo();
+  jans.forEach(j => ul.append(makeItemRow(j, loc, () => openQty(j, loc))));
 }
 
 function renderLeft(){
   const loc = session.location;
   const q = document.getElementById('search').value.trim().toLowerCase();
   const ul = document.getElementById('left-list'); ul.replaceChildren();
-  const counts = session.counts[loc];
   let jans = Object.keys(master.items);
   if(q){
     document.getElementById('left-title').textContent = '検索結果';
     jans = jans.filter(j => j.includes(q) || (master.items[j].name || '').toLowerCase().includes(q));
   }else{
     document.getElementById('left-title').textContent = `${loc}でまだ数えていない商品`;
-    jans = jans.filter(j => counts[j] === undefined);
+    jans = jans.filter(j => !isCounted(j, loc));
     jans.sort((a, b) => master.items[b][sysKey(loc)] - master.items[a][sysKey(loc)]); // 帳簿在庫が多い順
   }
   if(!master.updatedAt){
@@ -869,10 +926,7 @@ function renderLeft(){
     const li = document.createElement('li'); li.className = 'empty';
     li.textContent = q ? '見つかりませんでした' : 'すべての商品を数え終わりました'; ul.append(li); return;
   }
-  jans.slice(0, 200).forEach(j => {
-    const c = counts[j];
-    ul.append(makeItemRow(j, loc, c === undefined ? '未' : `${c}個`, () => openQty(j, loc), false));
-  });
+  jans.slice(0, 200).forEach(j => ul.append(makeItemRow(j, loc, () => openQty(j, loc))));
 }
 
 function renderPill(){
@@ -884,11 +938,6 @@ function renderPill(){
   else p.textContent = '同期済み';
 }
 window.addEventListener('offline', renderPill);
-
-function renderSentInfo(){
-  const s = session.sent[session.location];
-  document.getElementById('sent-info').textContent = s ? `最終送信：${new Date(s).toLocaleString('ja-JP')}` : '';
-}
 
 function renderSettings(){
   document.getElementById('master-info').textContent = master.updatedAt
@@ -910,35 +959,26 @@ function renderAll(){
 }
 
 /* ========== 送信・設定 ========== */
-function sendResults(){
+async function closeOut(){
   const loc = session.location;
-  const counts = session.counts[loc];
+  if(!navigator.onLine){ toast('締めはオンラインの時に行ってください','warn'); return; }
+  await flushQueue();
+  await pullTeam(); // 直前の全員の状況を確認してから
   const key = sysKey(loc);
-  const records = Object.keys(counts).map(j => {
-    const it = master.items[j];
-    const system = it ? it[key] : 0;
-    return { jan:j, name:it ? it.name : '未登録', system, actual:counts[j], diff:counts[j] - system };
-  });
-  if(document.getElementById('send-zero').checked){
-    Object.keys(master.items).forEach(j => {
-      const it = master.items[j];
-      if(counts[j] === undefined && it[key] !== 0) records.push({ jan:j, name:it.name, system:it[key], actual:0, diff:-it[key] });
-    });
-  }
-  if(!records.length){ toast('送信するデータがありません','warn'); return; }
-  const diffs = records.filter(r => r.diff !== 0).length;
-  if(!confirm(`${loc}の棚卸結果 ${records.length}件（差異あり${diffs}件）を送信しますか？`)) return;
-  queue.push({ action:'submit', submissionId:makeId(), sessionId:session.id, sessionStartedAt:session.startedAt, staff:settings.staff,
-               location:loc, countedAt:new Date().toISOString(), records });
-  saveQueue();
+  const zeros = Object.keys(master.items).filter(j => !isCounted(j, loc) && master.items[j][key] !== 0);
+  if(!zeros.length){ toast(`${loc}で未カウントの商品（帳簿在庫1以上）はありません`); return; }
+  if(!confirm(`${loc}で誰も数えていない ${zeros.length}件 を、実在庫0個として記録しますか？\n（全員の作業が終わってから実行してください）`)) return;
+  zeros.forEach(j => { setCount(j, 0, loc); enqueueRecord(j, loc, 0); });
   flushQueue();
+  renderAll();
 }
 
 function startNewSession(){
-  if(queue.length){ toast('未送信のデータがあります。先に送信してください','ng'); return; }
+  if(queue.length){ toast('未送信のデータがあります。電波のある場所で送信してからにしてください','ng'); return; }
   if(!confirm('今回のカウントをすべて消去して、新しい棚卸を始めますか？')) return;
   const loc = session.location;
   session = newSession(); session.location = loc; saveSession();
+  team = { sessionId:session.id, at:null, items:{} }; LS.set('tana_team', team);
   currentJan = null;
   setLocation(loc);
   syncMaster(true);
@@ -994,6 +1034,7 @@ if(settings.url){
   showView('scan');
   if(navigator.onLine) syncMaster(false);
   flushQueue();
+  pullTeam();
 }else{
   showSetup();
 }
