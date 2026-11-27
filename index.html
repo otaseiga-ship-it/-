@@ -171,7 +171,7 @@ nav button[aria-current="page"]{ color:var(--loc); font-weight:700; }
       <label class="lbl" for="set-token">合言葉</label>
       <input class="field" id="set-token" type="text" autocomplete="off">
       <label class="lbl" for="set-staff">担当者名</label>
-      <input class="field" id="set-staff" type="text" placeholder="例：山田">
+      <input class="field" id="set-staff" type="text" placeholder="例：山田（毎回同じ表記で）">
       <div style="height:14px"></div>
       <button class="btn primary" style="width:100%" onclick="saveSetup()">保存して商品データを取得</button>
     </div>
@@ -928,7 +928,7 @@ function sendResults(){
   if(!records.length){ toast('送信するデータがありません','warn'); return; }
   const diffs = records.filter(r => r.diff !== 0).length;
   if(!confirm(`${loc}の棚卸結果 ${records.length}件（差異あり${diffs}件）を送信しますか？`)) return;
-  queue.push({ action:'submit', submissionId:makeId(), sessionId:session.id, staff:settings.staff,
+  queue.push({ action:'submit', submissionId:makeId(), sessionId:session.id, sessionStartedAt:session.startedAt, staff:settings.staff,
                location:loc, countedAt:new Date().toISOString(), records });
   saveQueue();
   flushQueue();
@@ -980,6 +980,7 @@ async function saveSetup(){
   settings.url = url;
   settings.token = document.getElementById('set-token').value.trim();
   settings.staff = document.getElementById('set-staff').value.trim();
+  if(!settings.staff){ toast('担当者名を入力してください（記録の色分けに使います）','ng'); return; }
   LS.set('tana_settings', settings);
   localStorage.removeItem('gas_app_url');
   await syncMaster(true);
